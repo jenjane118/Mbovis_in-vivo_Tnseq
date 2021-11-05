@@ -1,0 +1,22 @@
+#METHODS TRANSIT TN-SEQ
+
+# TPP pre-processing of all .fastq
+transit tpp -bwa <PATH_TO_BWA> -ref <PATH_TO_REF_SEQ> -reads1 <reads1_file> -output <output_file>
+
+
+# TRANSIT HMM with LOESS correction
+transit hmm perm_input_tpp_MbA27.wig Mbovis_LT708304.prot_table output_dir/hmm_MbA027_loess.txt -l
+
+
+# TRANSIT stats
+transit tnseq_stats sample.wig -o sample_stats.dat
+
+
+# TRANSIT resampling
+
+# TTR normalisation
+transit resampling perm_input_tpp_MbA27.wig <output_library.wig> Mbovis_LT708304.prot_table <output_file.txt>
+
+# betageom normalisation
+transit resampling -n betageom perm_input_tpp_MbA27.wig <output_library.wig> Mbovis_LT708304.prot_table <output_file.txt>
+

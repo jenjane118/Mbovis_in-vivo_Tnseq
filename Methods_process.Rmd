@@ -1,0 +1,362 @@
+
+---
+title: "Mbovis in-vivo tn-seq data processing and analysis"
+output: html_notebook
+author: "Jennifer Stiens"
+date: "27 October, 2021"
+---
+
+
+```{r}
+library(here)
+library(tidyverse)
+```
+
+
+*OVERVIEW*
+
+1. TRANSIT-tpp utility to map TA sites to Mbovis AF2122/97 genome (NCBI Reference Sequence: NC_002945.3), adapter removal, etc. Generating .wig insertion files.
+
+2. Remove non-permissive sites from all insertion files.
+
+3. TRANSIT-HMM on input library with TTR normalisation using custom-made 'prot-table' from M. bovis AF2122/97 annotation file (NCBI Accession Number LT708304, version LT708304.1).
+
+4. Ran resampling between input library and each output sample independently, using the appropriate normalization based on reported skew in distribution of reads (TTR or betageom), and FDR correction for multiple testing.
+
+5. Removed all genes that have essentially no reads in any TA sites in any of the samples (and essential genes) from prot table.
+
+6. Re-ran resampling as above, with left-tailed p-value calculation and FDR corrected for multiple testing.
+
+7. Data analysis and plotting performed with R using Tidyverse and Circlize packages
+
+
+*DETAILED STEPS*
+
+Raw FASTQ sequence files were pre-processed using the TPP utility of TRANSIT python package (DeJesus et al., 2015), set to default 'Sassetti' protocol, including removing TRADIS tags and adapter sequences and mapping using BWA-MEM algorithm (Li, 2013), to generate insertion files in .wig format. 
+
+```{bash}
+
+#!/bin/bash
+
+#name: run_tpp.sh
+
+#usage: bash ~/git/tn_seq/scripts/run_tpp.sh list_of_samples.txt
+# transit tpp -bwa <PATH_TO_BWA> -ref <PATH_TO_REF_SEQ> -reads1 <reads1_file> -output <output_file>
+
+#read list of fastq files and analyse with tpp
+
+FILE_LIST=$1
+REF_FILE= Mbovis_AF2122_97.fasta
+BWA_EXEC=~/anaconda3/envs/tnseq/bin/bwa
+OUTPUT="vivo_tpp"
+
+for f in `cat $FILE_LIST`;
+do
+   echo "File in process: ${f}"
+   sample=${f##*/}
+   sample=${sample/_R1_001.fastq/}
+   tpp -bwa $BWA_EXEC -ref $REF_FILE -reads1 ${f} -output "$OUTPUT"_"$sample"
+   echo	"File complete= ${OUTPUT}_${sample}"
+done
+```
+
+
+Samples with < 10% insertion density were excluded from further analysis. 
+
+A custom annotation, ‘.prot-table’ for TRANSIT, was created from the M. bovis strain AF2122/97 annotation file (NCBI Accession Number LT708304, version LT708304.1) according to format specified in TRANSIT docs (https://transit.readthedocs.io/en/latest/transit_running.html). 
+
+Mbovis_LT708304.prot_table
+
+DeJesus et al, 2015 found that approximately 10% of TA sites in the Mtb H37 genome were non-permissive to Himar1 insertion, and that a particular sequence motif, (GC)GNTANC(GC), was associated with TA sites with few to no insertions. A search of the M.bovis AF2122/97 genome of the motif 'SGNTANCS' (where S is either G or C), found 6605 TA sites from analysis. This is approximately 9% of available TA sites (6605 of 73536). 
+
+These sites were removed from the insertion files of the input library, and all the passaged output libraries.
+
+Python scripts (non_permissive.py) were used to find appropriate motifs and remove associated TA sites from the insertion files. New insertion files are named "perm_tpp_<sample_name>" in insertion_files directory. Original input library file is tpp_MbA27.wig
+
+```{python}
+
+def find_np_sites(motif, offset, fasta):
+    """ Use motif finder to find all non-permissive TA sites in specified genome
+    Input       motif               motif for non-permissive sites
+                offset              number of nt before TA in motif
+                fasta               fasta file for specified genome
+    Output      np_sites            list of non-permissive positions
+
+    """
+    import os
+    from Bio import SeqIO
+    from Bio import SeqUtils
+
+    # parse fastq file to extract sequence and convert to string
+    fasta_file = os.path.expanduser(fasta)
+    for record in SeqIO.parse(fasta_file, "fasta"):
+        search_seq = str(record.seq)
+    #search_seq = fasta
+    # find matches for non-permissive motif
+    matches = SeqUtils.nt_search(search_seq.upper(), motif)
+    # add one to each position to make index=1 to match positions in wig file
+    indexed_positions = []
+    for i in range(1, len(matches)):
+        new_position = matches[i] + 1 + offset
+        indexed_positions.append(new_position)
+    # create name of new file
+    np_file = "bovis_np_sites.txt"
+    # open outfile and put in comment
+    outfile = open(os.path.expanduser(np_file), 'w')
+    outfile.write('\n'.join(map(str, indexed_positions)))
+    outfile.close()
+    return indexed_positions
+
+
+###################################################################################
+
+def remove_np_sites(wig_file, np_sites):
+    """
+    Open .wig file of insertion sites, delete non-permissive sites, save new .wig file
+
+    Input               wig_file            file of insertion sites (two columns, position/no insertions)
+                        np_sites            python list of positions of non-permissive sites
+    Output              new_wig_file        new file of insertion sites (all permissive)
+
+    """
+    import pandas as pd
+    import os
+
+    # open file and record comment line
+    f = open(os.path.expanduser(wig_file), 'r')
+    comment = f.readline()
+    df = pd.read_csv(wig_file, comment="#", sep=" ", header=0)
+    f.close()
+    # create name of new file
+    new_filename = wig_file.split("/")[-1]
+    new_wig_file = "perm_tpp_" + new_filename
+    # open outfile and put in comment
+    outfile = open(os.path.expanduser(new_wig_file), 'w')
+    outfile.write(comment)
+    # find sites not in non-permissable list and write to outfile
+    perm_sites = df[~df['variableStep'].isin(np_sites)]
+    perm_sites.to_csv(outfile, index=False, sep=' ')
+    outfile.close()
+
+    return outfile
+
+
+###################################################################################
+
+
+
+bovis_fasta = "Mbovis_AF2122_97.fasta"
+np_motif = 'SGNTANCS'
+
+no_sites = find_np_sites(np_motif, 3, bovis_fasta)
+print(len(no_sites))
+
+new_file = remove_np_sites('MbA27.wig', no_sites)
+
+```
+
+
+TRANSIT was run on M.bovis input library (perm_input_MbA27.wig) with non-permissive sites removed, using the default normalisation (TTR), LOESS correction (to remove possible bias related to genomic position) and the HMM algorithm. Calls of essentiality for each TA insertion site, and for each gene based on annotated gene boundaries were made.
+
+```{bash}
+
+transit hmm perm_input_tpp_MbA27.wig Mbovis_LT708304.prot_table output_dir/hmm_MbA027_loess.txt -l
+
+```
+
+Used tnseq_stats program in TRANSIT to assess skew
+
+```{bash}
+
+transit tnseq_stats sample.wig -o sample_stats.dat
+```
+
+Three of the 26 samples (MbA09, MbA22, MbA24) had skew > 50. These were normalised in resampling using betageom method versus the default TTR.
+
+
+```{bash}
+
+# with TTR normalisation
+transit resampling perm_input_tpp_MbA27.wig <output_library.wig> Mbovis_LT708304.prot_table <output_file.txt>
+
+# with betageom normalisation
+transit resampling -n betageom perm_input_tpp_MbA27.wig <output_library.wig> Mbovis_LT708304.prot_table <output_file.txt>
+
+```
+
+Using Python script (zero_genes.py), all genes that had max read at single TA site of <5, and sum of reads at TA site across 26 samples <55 were identified. This identified 487 genes (listed in 'zero_genes.txt') that were flagged and a new 'prot-table' was created ("Mbovis_resamp_07_10.prot_table") with these genes removed (and including only genes of type "CDS").
+
+
+```{python}
+
+#!/usr/bin python3
+# coding=utf-8
+
+""" Identify Zero Genes """
+
+"""
+Program:    zero_genes
+File:       zero_genes.py
+Version:    1.0
+Date:       05.10.21
+Function:   Create list of genes with zero insertions in both input/output files
+Author:     Jennifer J. Stiens
+            j.j.stiens@gmail.com
+            https://github.com/jenjane118/tn_seq
+
+Institution:    Birkbeck University of London
+                Project supervisors:  Dr. Irilenia Nobeli
+                                  Dr. Sharon Kendall (RVC)
+_____________________________________________________________________________
+Description:
+============
+This program sums the reads at every insertion site in a gene over all the samples and creates a list of genes that have nearly zero reads across all the insertion sites in all the samples.
+
+Usage:
+======
+zero_genes         SELF
+
+
+"""
+
+# ******************************************************************************
+# Import libraries
+
+import os, glob
+import pandas as pd
+import csv
+import numpy as np
+
+# ******************************************************************************
+
+def make_wig_df(wig_file_dir, input_wig):
+    """
+    Function to open each wig file and add as column to dataframe of insertion sites.
+    :param wig_file_dir: directory containing all wig files for analysis
+    :return: df of insertion sites and number of reads in each sample
+    (dim: columns are insertion sites (~73,000), rows are reads in each sample (27), first row is input lib)
+    """
+
+    with open(input_wig, 'r') as fi:
+        input_table = pd.read_table(fi, sep=" ", skiprows=1, header=0, index_col=0)
+    input_table.columns = ["reads"]
+    # list of wig files
+    dir = glob.glob(os.path.join(wig_file_dir, '*.wig'))
+    # number of files in directory
+    n_files = len(glob.glob(os.path.join(wig_file_dir, '*.wig')))
+    wig_df = input_table
+    for filename in dir:
+        with open(filename, 'r') as f:
+            sample_name = filename.replace("final_wigs_npremoved/perm_lung_tpp_", "")
+        table = pd.read_table(filename, sep=" ", skiprows=1, header=0, index_col=0)
+        table.columns = ["reads"]
+        wig_df[sample_name] = table.reads
+
+    return wig_df
+
+# ******************************************************************************
+
+def ta_list(tsv_file):
+    """
+    Function reads csv file of genes:insertion site coordinates and makes list.
+    :param tsv_file: file of gene name and list of coordinates of insertions
+    :return: list of genes and associated ta site coordinates
+    """
+
+    reader = csv.reader(open(tsv_file), delimiter = "\t")
+    site_list = list(reader)
+    return site_list
+
+
+# ******************************************************************************
+
+def zero_gene_list(wig_df, ta_list):
+    """
+    Function to iterate through wig dataframe, find sum of insertion sites indicated
+    by site_list across all wig files (rows). Have one threshold for sum of reads at sites
+    in one sample (5), and another threshold for sum of reads across samples at one site (55).
+
+    :param wig_df: df that contains all the insertion sites and number of reads
+                        for all the sample wig files
+    :param site_list: list of gene and the list of coordinates for insertion sites
+    :return: list of genes to be excluded from prot table
+    """
+    #test_genes = ["MB0004", "MB0047c", "MB0050", "MB0054", "MB0055", "MB0058", "MB0088", "MB0095"]
+    #test_genes = ["MB1064c", "MB0521", "MB0471"]
+    # make list of site counts and genes
+    site_list = []  #list of site counts
+    gene_list = []  #list of genes
+    for gene, sites in ta_list[1:]:
+        #if gene in test_genes:
+        site_list.append(sites)
+        gene_list.append(gene)
+    zero_genes = []
+    for i in range(0, len(gene_list)):
+        sites = site_list[i].split(",")
+        tester = site_tester(gene_list[i], sites, wig_df)
+        if tester == True:
+            zero_genes.append(gene_list[i])
+
+    return zero_genes
+
+# ******************************************************************************
+
+def site_tester(gene, sites, wig_df):
+    """
+    Function to look at sum of reads at site across all samples and max reads in any one sample
+    :param gene:
+    :param sites:
+    :param wig_df: dataframe of sites and reads in all samples
+    :return: boolean operator T/F
+    """
+
+    test = True
+    for coord in sites:
+        coord = int(coord)         #convert counts to integers
+        # check if sum of this site in all samples is below threshold
+        site_sum = wig_df.loc[coord].sum()
+        # maximum number of reads at site across samples
+        max_reads = wig_df.loc[coord].max()
+        if site_sum > 55 or max_reads > 5:
+            test = False
+            return test
+
+    return test
+
+########## main ###################################################################
+
+if __name__ == "__main__":
+
+    from datetime import datetime
+
+    start = datetime.now()
+
+    ta_file = "gene_ta_list.tsv"
+    w_dir = "final_wigs_npremoved"
+    i_wig = "perm_lung_tpp_MbA27.wig"
+
+    l = ta_list(ta_file)
+    
+    t_arr = make_wig_df(w_dir, i_wig)
+
+    zg = zero_gene_list(t_arr, l)
+    print(len(zg))
+    
+    f = open("zero_genes.txt", "w")
+    for gene in zg:
+        f.write("%s\n" % gene)
+
+
+    print(datetime.now() - start)
+
+```
+
+
+Re-ran resampling for each sample library using new, attenuated prot-table with appropriate normalisation algorithm, as before. As the data were expected to be skewed to a negative log2 fold change (reflecting attenuation), an edited TRANSIT resampling.py script to include the left-tail p-value calculation instead of 2-tail calculation was used for the final resampling analysis. (scripts/edited_transit_resampling.py)
+
+All resampling results were analysed using R packages including tidyverse, purr and circlize.
+
+Orthologous TB genes were from list published by Malone et al, 2018.
+
+For violin plots comparing gene groups, all log2 fold changes for each gene were normalised by subtracting the median log2 fold change of all genes together. Only genes not called as essential and containing more than 5 TA sites were included in comparison. (plot_code/violin_code.R)
+
