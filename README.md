@@ -1,6 +1,6 @@
-##This is the github repository for the ERAD-TB project and paper:
+## This is the github repository for the ERAD-TB project and paper:
 
-##"Defining the genes required for survival of Mycobacterium bovis in the bovine host offers novel insights on the genetic basis of survival of pathogenic mycobacteria"
+## "Defining the genes required for survival of Mycobacterium bovis in the bovine host offers novel insights on the genetic basis of survival of pathogenic mycobacteria"
 
 The repository includes a markdown document, "Methods_process.Rmd" which outlines the steps taken to analyse the Tn-seq files
 
