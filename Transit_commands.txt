@@ -20,3 +20,5 @@ transit resampling perm_input_tpp_MbA27.wig <output_library.wig> Mbovis_LT708304
 # betageom normalisation
 transit resampling -n betageom perm_input_tpp_MbA27.wig <output_library.wig> Mbovis_LT708304.prot_table <output_file.txt>
 
+# with edited prot table
+transit resampling -n betageom perm_lung_tpp_MbA27.wig <output_library/libraries.wig> Mbovis_resamp_07_10.prot_table <ouput_file.txt>

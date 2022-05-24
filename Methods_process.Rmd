@@ -34,7 +34,7 @@ library(tidyverse)
 
 Raw FASTQ sequence files were pre-processed using the TPP utility of TRANSIT python package (DeJesus et al., 2015), set to default 'Sassetti' protocol, including removing TRADIS tags and adapter sequences and mapping using BWA-MEM algorithm (Li, 2013), to generate insertion files in .wig format. 
 
-```{bash}
+```{bash, eval=F}
 
 #!/bin/bash
 
@@ -73,7 +73,7 @@ These sites were removed from the insertion files of the input library, and all 
 
 Python scripts (non_permissive.py) were used to find appropriate motifs and remove associated TA sites from the insertion files. New insertion files are named "perm_tpp_<sample_name>" in insertion_files directory. Original input library file is tpp_MbA27.wig
 
-```{python}
+```{python, eval=F}
 
 def find_np_sites(motif, offset, fasta):
     """ Use motif finder to find all non-permissive TA sites in specified genome
@@ -158,7 +158,7 @@ new_file = remove_np_sites('MbA27.wig', no_sites)
 
 TRANSIT was run on M.bovis input library (perm_input_MbA27.wig) with non-permissive sites removed, using the default normalisation (TTR), LOESS correction (to remove possible bias related to genomic position) and the HMM algorithm. Calls of essentiality for each TA insertion site, and for each gene based on annotated gene boundaries were made.
 
-```{bash}
+```{bash, eval=F}
 
 transit hmm perm_input_tpp_MbA27.wig Mbovis_LT708304.prot_table output_dir/hmm_MbA027_loess.txt -l
 
@@ -166,7 +166,7 @@ transit hmm perm_input_tpp_MbA27.wig Mbovis_LT708304.prot_table output_dir/hmm_M
 
 Used tnseq_stats program in TRANSIT to assess skew
 
-```{bash}
+```{bash, eval=F}
 
 transit tnseq_stats sample.wig -o sample_stats.dat
 ```
@@ -174,7 +174,7 @@ transit tnseq_stats sample.wig -o sample_stats.dat
 Three of the 26 samples (MbA09, MbA22, MbA24) had skew > 50. These were normalised in resampling using betageom method versus the default TTR.
 
 
-```{bash}
+```{bash, eval=F}
 
 # with TTR normalisation
 transit resampling perm_input_tpp_MbA27.wig <output_library.wig> Mbovis_LT708304.prot_table <output_file.txt>
@@ -187,7 +187,7 @@ transit resampling -n betageom perm_input_tpp_MbA27.wig <output_library.wig> Mbo
 Using Python script (zero_genes.py), all genes that had max read at single TA site of <5, and sum of reads at TA site across 26 samples <55 were identified. This identified 487 genes (listed in 'zero_genes.txt') that were flagged and a new 'prot-table' was created ("Mbovis_resamp_07_10.prot_table") with these genes removed (and including only genes of type "CDS").
 
 
-```{python}
+```{python, eval=F}
 
 #!/usr/bin python3
 # coding=utf-8
@@ -354,9 +354,48 @@ if __name__ == "__main__":
 
 Re-ran resampling for each sample library using new, attenuated prot-table with appropriate normalisation algorithm, as before. As the data were expected to be skewed to a negative log2 fold change (reflecting attenuation), an edited TRANSIT resampling.py script to include the left-tail p-value calculation instead of 2-tail calculation was used for the final resampling analysis. (scripts/edited_transit_resampling.py)
 
+```{bash, eval=F}
+
+# with edited prot table
+transit resampling -n betageom perm_input_tpp_MbA27.wig <output_library.wig> Mbovis_resamp_07_10.prot_table <ouput_file.txt>
+
+```
+
+R dataframe summarising results for each sample
+
+```{r resampling_data_individual}
+
+resamp_data <- readRDS(here("R_data/resamp_data.RData"))
+
+```
+
+
+Pooled resampling was performed as above, but with all sample wig files as replicates and using betageom normalisation.
+
+```{bash, eval=F}
+
+# all lung samples together
+transit resampling -n betageom perm_input_tpp_MbA27.wig perm_tpp_MbA09.wig,perm_tpp_MbA016.wig,perm_tpp_MbA02.wig,perm_tpp_MbA04.wig,perm_tpp_MbA05.wig,perm_tpp_MbA06.wig,perm_tpp_MbA07.wig,perm_tpp_MbA08.wig,perm_tpp_MbA10.wig,perm_tpp_MbA11.wig,perm_tpp_MbA12.wig,perm_tpp_MbA13.wig,perm_tpp_MbA14.wig,perm_tpp_MbA15.wig,perm_tpp_MbA16.wig,perm_tpp_MbA17.wig,perm_tpp_MbA18.wig,perm_tpp_MbA19.wig,perm_tpp_MbA20.wig,perm_tpp_MbA28.wig ~/tn_seq/data/Mbovis_resamp_07_10.prot_table ~/tn_seq/lung_tnseq/Output/lung_replicates.txt
+
+# all node samples together
+transit resampling -n betageom perm_input_tpp_MbA27.wig perm_tpp_MbA21.wig,perm_tpp_MbA22.wig,perm_tpp_MbA23.wig,perm_tpp_MbA24.wig,perm_tpp_MbA25.wig,perm_tpp_MbA26.wig ~/tn_seq/data/Mbovis_resamp_07_10.prot_table ~/tn_seq/lung_tnseq/Output/node_replicates.txt
+
+```
+
+Pooled data in separate dataframes for lung and node
+
+```{r pooled_resampling_results}
+
+pooled_lung <- readRDS(here("R_data/lung_pooled.RData"))
+
+pooled_node <- readRDS(here("R_data/node_pooled.RData"))
+
+```
+
+
 All resampling results were analysed using R packages including tidyverse, purr and circlize.
 
 Orthologous TB genes were from list published by Malone et al, 2018.
 
-For violin plots comparing gene groups, all log2 fold changes for each gene were normalised by subtracting the median log2 fold change of all genes together. Only genes not called as essential and containing more than 5 TA sites were included in comparison. (plot_code/violin_code.R)
+For violin plots comparing gene groups among individual samples, all log2 fold changes for each gene were normalised by subtracting the median log2 fold change of all genes together. Only genes not called as essential and containing more than 5 TA sites were included in comparison. (plot_code/violin_code.R)
 
